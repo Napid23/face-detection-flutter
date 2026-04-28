@@ -15,6 +15,7 @@ class LivenessChallenge {
     this.eyeOpenThreshold = 0.65,
     this.eyeClosedThreshold = 0.20,
     this.smileThreshold = 0.70,
+    this.yawThresholdDegrees = 18,
     this.resetIfNoFaceFor = const Duration(seconds: 2),
     this.maxChallengeTime = const Duration(seconds: 12),
   });
@@ -22,6 +23,7 @@ class LivenessChallenge {
   final double eyeOpenThreshold;
   final double eyeClosedThreshold;
   final double smileThreshold;
+  final double yawThresholdDegrees;
   final Duration resetIfNoFaceFor;
   final Duration maxChallengeTime;
 
@@ -34,14 +36,23 @@ class LivenessChallenge {
   bool _sawEyesClosedAfterOpen = false;
   bool _blinkCompleted = false;
   bool _smileCompleted = false;
+  bool _turnLeftCompleted = false;
+  bool _turnRightCompleted = false;
 
-  bool get isPassed => _blinkCompleted && _smileCompleted;
+  bool get isPassed =>
+      _blinkCompleted && _smileCompleted && _turnLeftCompleted && _turnRightCompleted;
 
   String get prompt {
     if (isPassed) return 'Challenge terpenuhi.';
-    if (!_blinkCompleted) return 'Tantangan: kedipkan mata';
-    if (!_smileCompleted) return 'Tantangan: tersenyum';
-    return 'Tantangan: kedip & senyum';
+    if (!_blinkCompleted) return 'Tantangan 1/3: kedipkan mata';
+    if (!_smileCompleted) return 'Tantangan 2/3: tersenyum';
+    if (!_turnLeftCompleted || !_turnRightCompleted) {
+      final parts = <String>[];
+      if (!_turnLeftCompleted) parts.add('kiri');
+      if (!_turnRightCompleted) parts.add('kanan');
+      return 'Tantangan 3/3: noleh ${parts.join(' & ')}';
+    }
+    return 'Tantangan: kedip, senyum, noleh';
   }
 
   void reset() {
@@ -52,6 +63,8 @@ class LivenessChallenge {
     _sawEyesClosedAfterOpen = false;
     _blinkCompleted = false;
     _smileCompleted = false;
+    _turnLeftCompleted = false;
+    _turnRightCompleted = false;
   }
 
   /// Update state from the current [face].
@@ -82,21 +95,38 @@ class LivenessChallenge {
       _trackingId ??= tid;
     }
 
-    final eyesOpenProb = _eyesOpenProbability(face);
-    if (eyesOpenProb != null) {
-      if (eyesOpenProb > eyeOpenThreshold) {
-        _sawEyesOpen = true;
-        if (_sawEyesClosedAfterOpen) {
-          _blinkCompleted = true; // closed -> open
+    // Enforce order: blink -> smile -> head turns.
+    if (!_blinkCompleted) {
+      final eyesOpenProb = _eyesOpenProbability(face);
+      if (eyesOpenProb != null) {
+        if (eyesOpenProb > eyeOpenThreshold) {
+          _sawEyesOpen = true;
+          if (_sawEyesClosedAfterOpen) {
+            _blinkCompleted = true; // closed -> open
+          }
+        } else if (_sawEyesOpen && eyesOpenProb < eyeClosedThreshold) {
+          _sawEyesClosedAfterOpen = true; // open -> closed
         }
-      } else if (_sawEyesOpen && eyesOpenProb < eyeClosedThreshold) {
-        _sawEyesClosedAfterOpen = true; // open -> closed
       }
+      return isPassed;
     }
 
-    final smileProb = face.smilingProbability;
-    if (smileProb != null && smileProb > smileThreshold) {
-      _smileCompleted = true;
+    if (!_smileCompleted) {
+      final smileProb = face.smilingProbability;
+      if (smileProb != null && smileProb > smileThreshold) {
+        _smileCompleted = true;
+      }
+      return isPassed;
+    }
+
+    // Head turn challenge (yaw): face.headEulerAngleY
+    final yaw = face.headEulerAngleY;
+    if (yaw != null) {
+      if (yaw <= -yawThresholdDegrees) {
+        _turnLeftCompleted = true;
+      } else if (yaw >= yawThresholdDegrees) {
+        _turnRightCompleted = true;
+      }
     }
 
     return isPassed;
@@ -121,4 +151,3 @@ class LivenessChallenge {
     return math.min(l, r);
   }
 }
-

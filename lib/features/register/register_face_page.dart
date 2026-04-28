@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../services/face_service.dart';
 import '../../services/local_face_store.dart';
+import '../check/liveness_challenge.dart';
 import '../../utils/mlkit_camera_image_converter.dart';
 import '../../widgets/face_painter.dart';
 
@@ -22,6 +23,7 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
   CameraController? _controller;
   late final FaceDetector _faceDetector;
   final _store = LocalFaceStore();
+  final _liveness = LivenessChallenge();
 
   bool _initializing = true;
   bool _detecting = false;
@@ -39,9 +41,11 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
     super.initState();
     _faceDetector = GoogleMlKit.vision.faceDetector(
       FaceDetectorOptions(
-        performanceMode: FaceDetectorMode.fast,
+        performanceMode: FaceDetectorMode.accurate,
+        enableClassification: true,
+        enableLandmarks: true,
         enableContours: false,
-        enableLandmarks: false,
+        enableTracking: true,
       ),
     );
     _init();
@@ -105,18 +109,31 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
         _latestFaces = faces;
       });
 
+      final bestFace = _selectBestFace(faces);
+      if (bestFace == null) {
+        _liveness.onNoFace();
+      } else {
+        _liveness.update(bestFace);
+      }
+
       // Capture harus diproses di dalam callback stream agar [CameraImage] masih valid
       // (beberapa device bisa error "Bad precondition" jika dipakai di luar callback).
       if (_captureRequested && !_capturing && faces.isNotEmpty) {
         _captureRequested = false;
         _capturing = true;
-        final best = _selectBestFace(faces);
-        if (best != null) {
+        final best = bestFace ?? _selectBestFace(faces);
+        if (best != null && _liveness.isPassed) {
           await _captureFromCurrentFrame(
             image: image,
             face: best,
             rotation: bundle.rotation,
           );
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(_liveness.prompt)),
+            );
+          }
         }
         _capturing = false;
       }
@@ -142,6 +159,13 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
     if (face == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Wajah belum terdeteksi.')),
+      );
+      return;
+    }
+
+    if (!_liveness.isPassed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_liveness.prompt)),
       );
       return;
     }
@@ -268,6 +292,27 @@ class _RegisterFacePageState extends State<RegisterFacePage> {
                     cameraLensDirection: c.description.lensDirection,
                   ),
                 ),
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 16,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      _liveness.isPassed
+                          ? 'Challenge OK. Tekan "Ambil Foto" untuk simpan wajah.'
+                          : _liveness.prompt,
+                      style: const TextStyle(color: Colors.white),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
               if (kDebugMode)
                 Positioned(
                   left: 12,
