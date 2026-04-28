@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../services/face_service.dart';
 import '../../services/local_face_store.dart';
+import 'liveness_challenge.dart';
 import '../../utils/mlkit_camera_image_converter.dart';
 import '../../widgets/face_painter.dart';
 
@@ -27,6 +28,7 @@ class _CheckFacePageState extends State<CheckFacePage> {
   CameraController? _controller;
   late final FaceDetector _faceDetector;
   final _store = LocalFaceStore();
+  final _liveness = LivenessChallenge();
 
   bool _initializing = true;
   bool _detecting = false;
@@ -45,9 +47,11 @@ class _CheckFacePageState extends State<CheckFacePage> {
     super.initState();
     _faceDetector = GoogleMlKit.vision.faceDetector(
       FaceDetectorOptions(
-        performanceMode: FaceDetectorMode.fast,
+        performanceMode: FaceDetectorMode.accurate,
+        enableClassification: true,
+        enableLandmarks: true,
         enableContours: false,
-        enableLandmarks: false,
+        enableTracking: true,
       ),
     );
     _init();
@@ -113,11 +117,17 @@ class _CheckFacePageState extends State<CheckFacePage> {
         _latestFaces = faces;
       });
 
-      await _maybeTryMatch(
-        image: image,
-        face: _selectBestFace(faces),
-        rotation: bundle.rotation,
-      );
+      final bestFace = _selectBestFace(faces);
+      if (bestFace == null) {
+        _liveness.onNoFace();
+        return;
+      }
+
+      // Challenge gate: harus kedip & senyum sebelum mulai matching embedding.
+      final passed = _liveness.update(bestFace);
+      if (!passed) return;
+
+      await _maybeTryMatch(image: image, face: bestFace, rotation: bundle.rotation);
     } catch (_) {
       // Abaikan error per-frame.
     } finally {
@@ -287,11 +297,13 @@ class _CheckFacePageState extends State<CheckFacePage> {
                     color: Colors.black.withValues(alpha: 0.45),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Padding(
-                    padding: EdgeInsets.all(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
                     child: Text(
-                      'Arahkan wajah ke kamera. Sistem akan mencoba mengenali tiap ~1 detik.',
-                      style: TextStyle(color: Colors.white),
+                      _liveness.isPassed
+                          ? 'Challenge OK. Mencocokkan wajah tiap ~1 detik...'
+                          : _liveness.prompt,
+                      style: const TextStyle(color: Colors.white),
                       textAlign: TextAlign.center,
                     ),
                   ),
